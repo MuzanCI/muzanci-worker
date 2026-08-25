@@ -14,7 +14,6 @@ use muzanci_transport::mux::MuxHandle;
 use crate::assignment_capacity::SharedAssignmentCapacityHandle;
 use crate::evaluation_capacity::SharedEvaluationCapacity;
 use crate::sandbox::Sandboxer;
-use crate::secret::SecretService;
 
 pub mod assignment_capacity;
 pub mod debugger;
@@ -25,7 +24,6 @@ pub mod evaluator;
 pub mod evaluator_scheduler;
 pub mod logging;
 pub mod sandbox;
-pub mod secret;
 pub mod signal_receiver;
 pub mod ssh;
 pub mod worker;
@@ -39,7 +37,6 @@ pub struct RunnerState {
     shared_evaluation_capacity: SharedEvaluationCapacity,
     shared_assignment_capacity_handle: SharedAssignmentCapacityHandle,
     sandboxer: Arc<dyn Sandboxer>,
-    secret_service: Arc<SecretService>,
     evaluator_dir_root: PathBuf,
 }
 
@@ -51,7 +48,6 @@ impl RunnerState {
         shared_evaluation_capacity: SharedEvaluationCapacity,
         shared_assignment_capacity_handle: SharedAssignmentCapacityHandle,
         sandboxer: Arc<dyn Sandboxer>,
-        secret_service: Arc<SecretService>,
         evaluator_dir_root: PathBuf,
     ) -> Self {
         Self {
@@ -61,7 +57,6 @@ impl RunnerState {
             shared_evaluation_capacity,
             shared_assignment_capacity_handle,
             sandboxer,
-            secret_service,
             evaluator_dir_root,
         }
     }

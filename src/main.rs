@@ -12,7 +12,6 @@ use muzanci_runner::sandbox::fake_sandboxer::FakeSandboxer;
 use muzanci_runner::sandbox::jail_sandboxer::JailSandboxer;
 use muzanci_runner::sandbox::zfs_image_store::ZfsImageStore;
 use muzanci_runner::sandbox::zfs_image_store::ZfsPool;
-use muzanci_runner::secret::SecretService;
 use muzanci_runner::signal_receiver::SignalReceiver;
 use muzanci_runner::worker_scheduler::WorkerScheduler;
 use tokio_util::sync::CancellationToken;
@@ -43,8 +42,6 @@ async fn main() {
     // };
     let sandboxer = Arc::new(FakeSandboxer::new());
 
-    let secret_service = Arc::new(SecretService::new(HashMap::new()));
-
     let evaluator_dir_root = PathBuf::from("/tmp/evaluators");
 
     let runner_state = Arc::new(RunnerState::new(
@@ -54,7 +51,6 @@ async fn main() {
         evaluation_capacity,
         assignment_capacity,
         sandboxer,
-        secret_service,
         evaluator_dir_root,
     ));
 

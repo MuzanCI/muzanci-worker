@@ -10,7 +10,7 @@ hyper = { version = "1.10.1", features = ["client", "http1"] }
 serde = { version = "1.0.228", features = ["derive"] }
 tokio = { version = "1.52.3", features = ["io-util", "net", "fs", "rt-multi-thread", "process", "signal"] }
 muzanci-transport = { path = "../muzanci-transport" }
-muzanci-interpreter = { path = "../muzanci-interpreter" }
+muzanci-config = { path = "../muzanci-config" }
 muzanci-image = { path = "../muzanci-image" }
 muzanci-git = { path = "../muzanci-git" }
 rustls = { version = "0.23.40"}

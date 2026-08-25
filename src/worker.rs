@@ -3,11 +3,11 @@ use std::sync::Arc;
 use tokio::join;
 use tokio::sync::mpsc;
 
+use muzanci_config::StepConfig;
+use muzanci_config::StepId;
 use muzanci_git::GitClient;
 use muzanci_image::image::ImagePlatform;
 use muzanci_image::manifest_ref::ManifestRef;
-use muzanci_interpreter::StepConfig;
-use muzanci_interpreter::StepId;
 use muzanci_transport::channel::ChannelReceiver;
 use muzanci_transport::channel::ChannelSender;
 use muzanci_transport::channel::ChannelType;
@@ -163,13 +163,8 @@ impl Worker {
         let step_id = step.step_id;
         self.start_step(step_id).await?;
 
-        // TODO: Resolve step.secrets to hashmap
         let envs = {
             let mut envs = HashMap::new();
-            for secret in &step.secrets {
-                let value = self.runner_state.secret_service.resolve(&secret).await?;
-                envs.insert(secret.name.clone(), value);
-            }
             envs
         };
 

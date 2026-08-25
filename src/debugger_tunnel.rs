@@ -8,8 +8,8 @@ use muzanci_transport::message::Message;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
+use muzanci_config::config::DebugSessionId;
 use muzanci_transport::channel::ChannelType;
-use muzanci_transport::message::DebugId;
 use muzanci_transport::mux::MuxHandle;
 
 use crate::ssh::server::ServerHandler;
@@ -31,7 +31,7 @@ impl Future for DebuggerTunnelHandle {
 
 pub struct DebuggerTunnel {
     cancellation_token: CancellationToken,
-    debug_id: DebugId,
+    debug_session_id: DebugSessionId,
     channel_tx: Option<ChannelSender>,
     channel_rx: Option<ChannelReceiver>,
 }
@@ -40,7 +40,7 @@ impl DebuggerTunnel {
     pub fn spawn(
         mux_handle: MuxHandle,
         cancellation_token: CancellationToken,
-        debug_id: DebugId,
+        debug_session_id: DebugSessionId,
         reply_tx: oneshot::Sender<()>,
     ) -> DebuggerTunnelHandle {
         let handle = tokio::spawn(async move {
@@ -50,7 +50,7 @@ impl DebuggerTunnel {
                 .unwrap();
             DebuggerTunnel {
                 cancellation_token,
-                debug_id,
+                debug_session_id,
                 channel_tx: Some(channel_tx),
                 channel_rx: Some(channel_rx),
             }
@@ -110,7 +110,7 @@ impl DebuggerTunnel {
         channel_tx
             .send(Message::DebuggerTunnel(
                 DebuggerTunnelMessage::CreateDebugTunnelRequest {
-                    debug_id: self.debug_id,
+                    debug_session_id: self.debug_session_id,
                 },
             ))
             .await?;

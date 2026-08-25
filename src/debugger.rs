@@ -1,6 +1,3 @@
-use muzanci_git::GitBranch;
-use muzanci_transport::message::DebugClientMessage;
-use muzanci_transport::message::DebugId;
 use sha2::Digest;
 use sha2::Sha256;
 use std::sync::Arc;
@@ -10,13 +7,16 @@ use tokio::sync::oneshot;
 use tracing::instrument;
 use url::Url;
 
+use muzanci_config::StepConfig;
+use muzanci_config::config::DebugSessionId;
+use muzanci_git::GitBranch;
 use muzanci_git::GitClient;
 use muzanci_image::image::ImagePlatform;
 use muzanci_image::manifest_ref::ManifestRef;
-use muzanci_interpreter::StepConfig;
 use muzanci_transport::channel::ChannelReceiver;
 use muzanci_transport::channel::ChannelSender;
 use muzanci_transport::channel::ChannelType;
+use muzanci_transport::message::DebugClientMessage;
 use muzanci_transport::message::DebuggerMessage;
 use muzanci_transport::message::Message;
 
@@ -50,7 +50,7 @@ pub struct Debugger {
     runner_state: Arc<RunnerState>,
     channel_tx: ChannelSender,
     channel_rx: ChannelReceiver,
-    debug_id: DebugId,
+    debug_session_id: DebugSessionId,
     manifest_ref: ManifestRef,
     platform: ImagePlatform,
     sandbox: Option<Arc<dyn Sandbox>>,
@@ -62,7 +62,7 @@ pub struct Debugger {
 impl Debugger {
     pub fn spawn(
         runner_state: Arc<RunnerState>,
-        debug_id: DebugId,
+        debug_session_id: DebugSessionId,
         manifest_ref: ManifestRef,
         platform: ImagePlatform,
         permit: AssignmentCapacityPermit,
@@ -78,7 +78,7 @@ impl Debugger {
                 runner_state,
                 channel_tx,
                 channel_rx,
-                debug_id,
+                debug_session_id,
                 manifest_ref,
                 platform,
                 sandbox: None,
@@ -128,7 +128,7 @@ impl Debugger {
         self.channel_tx
             .send(Message::Debugger(
                 DebuggerMessage::ConnectDebugClientRequest {
-                    debug_id: self.debug_id,
+                    debug_session_id: self.debug_session_id,
                 },
             ))
             .await?;
@@ -378,7 +378,7 @@ impl Debugger {
         DebuggerTunnel::spawn(
             self.runner_state.mux_handle.clone(),
             self.runner_state.cancellation_token(),
-            self.debug_id,
+            self.debug_session_id,
             reply_tx,
         );
 

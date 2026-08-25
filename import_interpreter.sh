@@ -3,7 +3,7 @@
 set -o errexit
 set -o nounset
 
-cargo build -p muzanci-interpreter
+cargo build -p muzanci-config
 
 mkdir -p ./embed
-cp ../target/debug/interpreter ./embed/interpreter
+cp ../target/debug/config ./embed/config

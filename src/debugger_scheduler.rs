@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
+use muzanci_config::config::DebugSessionId;
 use muzanci_transport::channel::ChannelReceiver;
 use muzanci_transport::channel::ChannelSender;
 use muzanci_transport::channel::ChannelType;
-use muzanci_transport::message::DebugId;
 use muzanci_transport::message::DebuggerSchedulerMessage;
 use muzanci_transport::message::Message;
-use muzanci_transport::message::WaitingDebug;
+use muzanci_transport::message::WaitingDebugSession;
 
 use crate::RunnerState;
 use crate::debugger::Debugger;
@@ -98,12 +98,12 @@ impl DebuggerScheduler {
                         continue;
                     }
                 };
-                match self.reserve_debug(waiting_debug.debug_id).await {
+                match self.reserve_debug(waiting_debug.debug_session_id).await {
                     Ok(_) => {
                         tracing::info!("Successfully reserved debug {:?}", waiting_debug);
                         Debugger::spawn(
                             self.runner_state.clone(),
-                            waiting_debug.debug_id,
+                            waiting_debug.debug_session_id,
                             waiting_debug.manifest_ref,
                             waiting_debug.platform,
                             permit,
@@ -129,11 +129,11 @@ impl DebuggerScheduler {
     }
 
     // TODO: Add filters for waiting debugs.
-    async fn fetch_waiting_debugs(&mut self) -> anyhow::Result<Vec<WaitingDebug>> {
+    async fn fetch_waiting_debugs(&mut self) -> anyhow::Result<Vec<WaitingDebugSession>> {
         tracing::info!("Fetching waiting debugs from the server.");
         self.channel_tx
             .send(Message::DebuggerScheduler(
-                DebuggerSchedulerMessage::FetchWaitingDebugsRequest,
+                DebuggerSchedulerMessage::FetchWaitingDebugSessionsRequest,
             ))
             .await?;
 
@@ -143,7 +143,7 @@ impl DebuggerScheduler {
             .ok_or(anyhow::anyhow!("Channel closed"))
             .and_then(|response| match response {
                 Message::DebuggerScheduler(
-                    DebuggerSchedulerMessage::FetchWaitingDebugsResponse { result },
+                    DebuggerSchedulerMessage::FetchWaitingDebugSessionsResponse { result },
                 ) => result.map_err(|e| anyhow::anyhow!(e)),
                 _ => {
                     tracing::error!("Unexpected response: {:?}", response);
@@ -153,12 +153,12 @@ impl DebuggerScheduler {
     }
 
     // Uses the reserve and commit pattern for cancellation safety.
-    async fn reserve_debug(&mut self, debug_id: DebugId) -> anyhow::Result<()> {
+    async fn reserve_debug(&mut self, debug_session_id: DebugSessionId) -> anyhow::Result<()> {
         self.channel_tx
             .send(Message::DebuggerScheduler(
-                DebuggerSchedulerMessage::ReserveDebugRequest {
+                DebuggerSchedulerMessage::ReserveDebugSessionRequest {
                     runner_id: self.runner_state.runner_id,
-                    debug_id,
+                    debug_session_id,
                 },
             ))
             .await?;
@@ -168,9 +168,9 @@ impl DebuggerScheduler {
             .await
             .ok_or(anyhow::anyhow!("Channel closed"))
             .and_then(|response| match response {
-                Message::DebuggerScheduler(DebuggerSchedulerMessage::ReserveDebugResponse {
-                    result,
-                }) => result.map_err(|e| anyhow::anyhow!(e)),
+                Message::DebuggerScheduler(
+                    DebuggerSchedulerMessage::ReserveDebugSessionResponse { result },
+                ) => result.map_err(|e| anyhow::anyhow!(e)),
                 _ => {
                     eprintln!("Unexpected response: {:?}", response);
                     Err(anyhow::anyhow!("Unexpected response"))

@@ -3,14 +3,14 @@ use std::path::Path;
 use std::sync::Arc;
 use url::Url;
 
+use muzanci_config::Config;
+use muzanci_config::config::EvaluationConfig;
 use muzanci_git::GitBranch;
 use muzanci_git::GitClient;
 use muzanci_git::GitCommitSha;
-use muzanci_interpreter::Config;
 use muzanci_transport::channel::ChannelReceiver;
 use muzanci_transport::channel::ChannelSender;
 use muzanci_transport::channel::ChannelType;
-use muzanci_transport::message::EvaluationConfig;
 use muzanci_transport::message::EvaluatorMessage;
 use muzanci_transport::message::Message;
 use muzanci_transport::message::TriggerId;
