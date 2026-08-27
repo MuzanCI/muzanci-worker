@@ -1,3 +1,4 @@
+use muzanci_config::config::ImageConfig;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -38,15 +39,20 @@ async fn main() -> anyhow::Result<()> {
 
     eprintln!("Created jail sandboxer");
 
-    let manifest_ref = ManifestRef::try_from("freebsd/freebsd-toolchain:15.0")?;
-    let platform = ImagePlatform {
-        architecture: ImagePlatformArchitecture::ARM64,
-        os: ImagePlatformOs::FREEBSD,
-    };
-    let sandbox_config = SandboxConfig {
-        sandbox_id: Uuid::now_v7(),
-        manifest_ref,
-        platform,
+    let sandbox_config = {
+        let manifest_ref = ManifestRef::try_from("freebsd/freebsd-toolchain:15.0")?;
+        let platform = ImagePlatform {
+            architecture: ImagePlatformArchitecture::ARM64,
+            os: ImagePlatformOs::FREEBSD,
+        };
+        let image = ImageConfig {
+            manifest_ref,
+            platform,
+        };
+        SandboxConfig {
+            sandbox_id: Uuid::now_v7(),
+            image,
+        }
     };
 
     let sandbox = sandboxer.create(sandbox_config).await?;

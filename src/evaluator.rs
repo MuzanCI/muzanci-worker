@@ -4,7 +4,7 @@ use std::sync::Arc;
 use url::Url;
 
 use muzanci_config::Config;
-use muzanci_config::config::EvaluationConfig;
+use muzanci_config::config::TriggerConfig;
 use muzanci_git::GitBranch;
 use muzanci_git::GitClient;
 use muzanci_git::GitCommitSha;
@@ -88,21 +88,13 @@ impl Evaluator {
 
     async fn main(&mut self) -> anyhow::Result<()> {
         let config = self.start().await?;
-        match self
-            .evaluate(
-                &config.checkout.url,
-                &config.checkout.branch,
-                &config.checkout.commit_sha,
-                &config.input,
-            )
-            .await
-        {
+        match self.evaluate(&config).await {
             Ok(config) => self.complete(config).await,
             Err(e) => self.fail(e.to_string()).await,
         }
     }
 
-    async fn start(&mut self) -> anyhow::Result<EvaluationConfig> {
+    async fn start(&mut self) -> anyhow::Result<TriggerConfig> {
         self.channel_tx
             .send(Message::Evaluator(EvaluatorMessage::StartRequest {
                 runner_id: self.runner_state.runner_id,
@@ -122,23 +114,22 @@ impl Evaluator {
             })
     }
 
-    async fn evaluate(
-        &self,
-        url: &Url,
-        branch: &GitBranch,
-        commit: &GitCommitSha,
-        input: &Path,
-    ) -> anyhow::Result<Config> {
+    async fn evaluate(&self, config: &TriggerConfig) -> anyhow::Result<Config> {
         let evaluator_dir = tempfile::tempdir_in(&self.runner_state.evaluator_dir_root)?;
 
         {
             let git_client = GitClient::try_default()?;
-            git_client.checkout_commit(url, branch, &evaluator_dir.path(), commit)?;
+            git_client.checkout_commit(
+                &config.remote.url,
+                &config.remote.branch,
+                &evaluator_dir.path(),
+                &config.commit_sha,
+            )?;
             // git_client must be dropped here because it is not Send.
             // TODO: Consider offloading to a tokio::task::spawn_blocking.
         }
 
-        let input = evaluator_dir.path().join(input);
+        let input = evaluator_dir.path().join(&config.input);
         Config::from_file(&input, &HashMap::new())
     }
 

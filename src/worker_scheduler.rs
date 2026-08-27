@@ -97,13 +97,7 @@ impl WorkerScheduler {
                 match self.reserve_task(task.task_id).await {
                     Ok(_) => {
                         tracing::info!("Successfully reserved task {:?}", task);
-                        Worker::spawn(
-                            self.runner_state.clone(),
-                            task.task_id,
-                            task.manifest_ref,
-                            task.platform,
-                            permit,
-                        );
+                        Worker::spawn(self.runner_state.clone(), task.task_id, permit);
                     }
                     Err(e) => {
                         tracing::error!("Failed to reserve task {:?}: {:?}", task, e);

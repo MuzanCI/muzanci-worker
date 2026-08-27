@@ -1,3 +1,4 @@
+use muzanci_config::config::ImageConfig;
 use sha2::Digest;
 use sha2::Sha256;
 use std::sync::Arc;
@@ -11,8 +12,6 @@ use muzanci_config::StepConfig;
 use muzanci_config::config::DebugSessionId;
 use muzanci_git::GitBranch;
 use muzanci_git::GitClient;
-use muzanci_image::image::ImagePlatform;
-use muzanci_image::manifest_ref::ManifestRef;
 use muzanci_transport::channel::ChannelReceiver;
 use muzanci_transport::channel::ChannelSender;
 use muzanci_transport::channel::ChannelType;
@@ -51,8 +50,6 @@ pub struct Debugger {
     channel_tx: ChannelSender,
     channel_rx: ChannelReceiver,
     debug_session_id: DebugSessionId,
-    manifest_ref: ManifestRef,
-    platform: ImagePlatform,
     sandbox: Option<Arc<dyn Sandbox>>,
     diff_file: Option<NamedTempFile>,
     diff_hasher: Option<Sha256>,
@@ -63,8 +60,6 @@ impl Debugger {
     pub fn spawn(
         runner_state: Arc<RunnerState>,
         debug_session_id: DebugSessionId,
-        manifest_ref: ManifestRef,
-        platform: ImagePlatform,
         permit: AssignmentCapacityPermit,
     ) -> DebuggerHandle {
         let runner_state = runner_state.clone();
@@ -79,8 +74,6 @@ impl Debugger {
                 channel_tx,
                 channel_rx,
                 debug_session_id,
-                manifest_ref,
-                platform,
                 sandbox: None,
                 diff_file: None,
                 diff_hasher: None,
@@ -110,7 +103,7 @@ impl Debugger {
 
     #[instrument(skip_all)]
     async fn main(&mut self) -> anyhow::Result<()> {
-        self.connect_debug_client().await?;
+        self.connect_debugger().await?;
         loop {
             match self.channel_rx.recv().await {
                 Some(message) => {
@@ -124,13 +117,11 @@ impl Debugger {
         }
     }
 
-    async fn connect_debug_client(&mut self) -> anyhow::Result<()> {
+    async fn connect_debugger(&mut self) -> anyhow::Result<()> {
         self.channel_tx
-            .send(Message::Debugger(
-                DebuggerMessage::ConnectDebugClientRequest {
-                    debug_session_id: self.debug_session_id,
-                },
-            ))
+            .send(Message::Debugger(DebuggerMessage::ConnectDebuggerRequest {
+                debug_session_id: self.debug_session_id,
+            }))
             .await?;
 
         self.channel_rx
@@ -138,7 +129,7 @@ impl Debugger {
             .await
             .ok_or(anyhow::anyhow!("Channel closed"))
             .and_then(|response| match response {
-                Message::Debugger(DebuggerMessage::ConnectDebugClientResponse { result }) => {
+                Message::Debugger(DebuggerMessage::ConnectDebuggerResponse { result }) => {
                     result.map_err(|e| anyhow::anyhow!(e))
                 }
                 _ => Err(anyhow::anyhow!("Unexpected message type")),
@@ -152,7 +143,9 @@ impl Debugger {
         };
 
         match message {
-            DebugClientMessage::CreateSandboxRequest => self.handle_create_sandbox_request().await,
+            DebugClientMessage::CreateSandboxRequest { image } => {
+                self.handle_create_sandbox_request(image).await
+            }
             DebugClientMessage::CheckoutBranchRequest { url, branch } => {
                 self.handle_checkout_branch_request(url, branch).await
             }
@@ -176,8 +169,8 @@ impl Debugger {
         }
     }
 
-    async fn handle_create_sandbox_request(&mut self) -> anyhow::Result<()> {
-        let result = self.create_sandbox().await.map_err(|e| e.to_string());
+    async fn handle_create_sandbox_request(&mut self, image: ImageConfig) -> anyhow::Result<()> {
+        let result = self.create_sandbox(image).await.map_err(|e| e.to_string());
 
         self.channel_tx
             .send(Message::DebugClient(
@@ -188,11 +181,10 @@ impl Debugger {
         Ok(())
     }
 
-    async fn create_sandbox(&mut self) -> anyhow::Result<()> {
+    async fn create_sandbox(&mut self, image: ImageConfig) -> anyhow::Result<()> {
         let sandbox_config = SandboxConfig {
             sandbox_id: SandboxId::now_v7(),
-            manifest_ref: self.manifest_ref.clone(),
-            platform: self.platform.clone(),
+            image,
         };
 
         let sandbox = self.runner_state.sandboxer.create(sandbox_config).await?;

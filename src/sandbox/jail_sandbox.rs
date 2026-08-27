@@ -49,7 +49,7 @@ impl Sandbox for JailSandbox {
     }
 
     fn workspace_path(&self) -> PathBuf {
-        match &self.config.platform.os {
+        match &self.config.image.platform.os {
             ImagePlatformOs::LINUX => self.jail_conf.path().join("compat/linux/workspace"),
             _ => self.jail_conf.path().join("workspace"),
         }
@@ -61,7 +61,7 @@ impl Sandbox for JailSandbox {
         envs: &HashMap<String, String>,
         output_tx: mpsc::Sender<ProcessOutput>,
     ) -> Result<ExitStatus, SandboxError> {
-        let cmd_str = match &self.config.platform.os {
+        let cmd_str = match &self.config.image.platform.os {
             ImagePlatformOs::LINUX => format!(
                 "chroot /compat/linux sh -c \"cd {} && {}\"",
                 self.workspace_path().display(),

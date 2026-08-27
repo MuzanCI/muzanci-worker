@@ -82,19 +82,16 @@ impl DebuggerScheduler {
 
             // Iterate over debugs and attempt to reserve until capacity is reached or no more debugs are available.
             for waiting_debug in debugs {
+                let capacity = 1;
                 let permit = match self
                     .runner_state
                     .shared_assignment_capacity_handle
-                    .reserve_high(waiting_debug.capacity)
+                    .reserve_high(capacity)
                     .await
                 {
                     Ok(permit) => permit,
                     Err(e) => {
-                        tracing::error!(
-                            "Failed to reserve capacity {:?}: {:?}",
-                            waiting_debug.capacity,
-                            e
-                        );
+                        tracing::error!("Failed to reserve capacity {:?}: {:?}", capacity, e);
                         continue;
                     }
                 };
@@ -104,8 +101,6 @@ impl DebuggerScheduler {
                         Debugger::spawn(
                             self.runner_state.clone(),
                             waiting_debug.debug_session_id,
-                            waiting_debug.manifest_ref,
-                            waiting_debug.platform,
                             permit,
                         );
                     }

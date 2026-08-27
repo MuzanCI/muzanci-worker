@@ -125,7 +125,8 @@ pub async fn connect(
         );
     });
 
-    let mux_handle = Mux::spawn(server_stream, channel_acceptor, cancellation_token);
+    let (mux_handle, _join_handle) =
+        Mux::spawn(server_stream, channel_acceptor, cancellation_token);
 
     Ok((runner_id, mux_handle))
 }

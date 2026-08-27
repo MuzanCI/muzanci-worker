@@ -99,7 +99,7 @@ impl JailSandboxer {
             sandbox_config.sandbox_id.clone(),
             &sandbox_dir,
             slot_id,
-            sandbox_config.platform.os.clone(),
+            sandbox_config.image.platform.os.clone(),
             rootfs,
             zfs_quota,
         );
@@ -316,7 +316,7 @@ impl Sandboxer for JailSandboxer {
 
         // TODO: Validate config.platform.arch is supported.
 
-        let rootfs = match config.platform.os {
+        let rootfs = match config.image.platform.os {
             ImagePlatformOs::LINUX => {
                 let linux_dataset = format!(
                     "{}/rootfs-linux-sandbox-{}",
@@ -325,7 +325,7 @@ impl Sandboxer for JailSandboxer {
                 );
                 let linux_snapshot = self
                     .image_store
-                    .snapshot(&config.manifest_ref, &config.platform)
+                    .snapshot(&config.image.manifest_ref, &config.image.platform)
                     .await
                     .map_err(|e| SandboxerError(e.to_string()))?;
 
@@ -341,7 +341,7 @@ impl Sandboxer for JailSandboxer {
                             .map_err(|e| SandboxerError(e.to_string()))?;
                     let freebsd_platform = ImagePlatform {
                         os: ImagePlatformOs::FREEBSD,
-                        architecture: config.platform.architecture.clone(),
+                        architecture: config.image.platform.architecture.clone(),
                     };
                     self.image_store
                         .snapshot(&freebsd_manifest_ref, &freebsd_platform)
@@ -368,7 +368,7 @@ impl Sandboxer for JailSandboxer {
                             .map_err(|e| SandboxerError(e.to_string()))?;
                     let freebsd_platform = ImagePlatform {
                         os: ImagePlatformOs::FREEBSD,
-                        architecture: config.platform.architecture.clone(),
+                        architecture: config.image.platform.architecture.clone(),
                     };
                     self.image_store
                         .snapshot(&freebsd_manifest_ref, &freebsd_platform)
@@ -384,7 +384,7 @@ impl Sandboxer for JailSandboxer {
             ImagePlatformOs::OTHER(_) => {
                 return Err(SandboxerError(format!(
                     "Unsupported platform: [{}]",
-                    config.platform.os
+                    config.image.platform.os
                 )));
             }
         };

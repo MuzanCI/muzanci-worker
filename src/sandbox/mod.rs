@@ -3,12 +3,10 @@ use std::path::PathBuf;
 use std::process::ExitStatus;
 use std::sync::Arc;
 
+use muzanci_config::config::ImageConfig;
 use tokio::sync::mpsc;
 
 use muzanci_transport::message::ProcessOutput;
-
-use muzanci_image::image::ImagePlatform;
-use muzanci_image::manifest_ref::ManifestRef;
 
 pub mod fake_sandbox;
 pub mod fake_sandboxer;
@@ -26,8 +24,7 @@ pub struct SandboxError(pub String);
 
 pub struct SandboxConfig {
     pub sandbox_id: SandboxId,
-    pub manifest_ref: ManifestRef,
-    pub platform: ImagePlatform,
+    pub image: ImageConfig,
 }
 
 #[async_trait::async_trait]

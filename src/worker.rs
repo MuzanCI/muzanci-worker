@@ -44,8 +44,6 @@ pub struct Worker {
     channel_tx: ChannelSender,
     channel_rx: ChannelReceiver,
     task_id: TaskId,
-    manifest_ref: ManifestRef,
-    platform: ImagePlatform,
     _permit: AssignmentCapacityPermit,
 }
 
@@ -58,8 +56,6 @@ impl Worker {
     pub fn spawn(
         runner_state: Arc<RunnerState>,
         task_id: TaskId,
-        manifest_ref: ManifestRef,
-        platform: ImagePlatform,
         permit: AssignmentCapacityPermit,
     ) -> WorkerHandle {
         let runner_state = runner_state.clone();
@@ -74,8 +70,6 @@ impl Worker {
                 channel_tx,
                 channel_rx,
                 task_id,
-                manifest_ref,
-                platform,
                 _permit: permit,
             }
             .run()
@@ -103,8 +97,7 @@ impl Worker {
         let task_config = self.start().await?;
         let sandbox_config = SandboxConfig {
             sandbox_id: SandboxId::now_v7(),
-            manifest_ref: self.manifest_ref.clone(),
-            platform: self.platform.clone(),
+            image: task_config.image,
         };
         let sandbox: Arc<dyn Sandbox> = {
             let sandbox = self.runner_state.sandboxer.create(sandbox_config).await?;
@@ -113,10 +106,10 @@ impl Worker {
         {
             let git_client = GitClient::try_default()?;
             git_client.checkout_commit(
-                &task_config.checkout_config.url,
-                &task_config.checkout_config.branch,
+                &task_config.remote.url,
+                &task_config.remote.branch,
                 &sandbox.workspace_path(),
-                &task_config.checkout_config.commit_sha,
+                &task_config.commit_sha,
             )?;
         }
         for step in task_config.steps {
