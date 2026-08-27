@@ -341,8 +341,7 @@ impl ZfsImageStore {
 
     #[tracing::instrument(skip_all)]
     pub async fn collect_garbage(&self) -> Result<(), ZfsImageStoreError> {
-        let gc_write_guard = self.gc_write_lock().await?;
-
+        let _ = self.gc_write_lock().await;
         unimplemented!();
     }
 
