@@ -129,8 +129,18 @@ impl Evaluator {
             // TODO: Consider offloading to a tokio::task::spawn_blocking.
         }
 
+        tracing::info!(
+            "checked out {}/{}@{:?}",
+            config.remote.url,
+            config.remote.branch,
+            config.commit_sha
+        );
+
         let input = evaluator_dir.path().join(&config.input);
-        Config::from_file(&input, &HashMap::new())
+        let mut env = HashMap::new();
+        env.insert("GIT_BRANCH".to_string(), config.remote.branch.clone());
+        env.insert("GIT_COMMIT".to_string(), config.commit_sha.clone());
+        Config::from_file(&input, &env)
     }
 
     async fn complete(&mut self, config: Config) -> anyhow::Result<()> {
