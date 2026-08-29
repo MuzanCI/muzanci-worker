@@ -6,8 +6,6 @@ use tokio::sync::mpsc;
 use muzanci_config::StepConfig;
 use muzanci_config::StepId;
 use muzanci_git::GitClient;
-use muzanci_image::image::ImagePlatform;
-use muzanci_image::manifest_ref::ManifestRef;
 use muzanci_transport::channel::ChannelReceiver;
 use muzanci_transport::channel::ChannelSender;
 use muzanci_transport::channel::ChannelType;
@@ -47,7 +45,7 @@ pub struct Worker {
     _permit: AssignmentCapacityPermit,
 }
 
-enum StepResult {
+enum ItemResult {
     Continue,
     Fail(String),
 }
@@ -94,7 +92,7 @@ impl Worker {
     }
 
     async fn main(&mut self) -> anyhow::Result<()> {
-        let task_config = self.start().await?;
+        let task_config = self.start_task().await?;
         let sandbox_config = SandboxConfig {
             sandbox_id: SandboxId::now_v7(),
             image: task_config.image,
@@ -113,24 +111,24 @@ impl Worker {
             )?;
         }
         for step in task_config.steps {
-            match self.run_step(sandbox.clone(), step).await? {
-                StepResult::Continue => {
+            match self.run_item(sandbox.clone(), step).await? {
+                ItemResult::Continue => {
                     continue;
                 }
-                StepResult::Fail(reason) => {
-                    self.fail(reason).await?;
+                ItemResult::Fail(reason) => {
+                    self.fail_task(reason).await?;
                     // The step failed so we stop, but the worker itself
                     // is considered successful.
                     return Ok(());
                 }
             }
         }
-        self.complete().await
+        self.complete_task().await
     }
 
-    async fn start(&mut self) -> anyhow::Result<TaskConfig> {
+    async fn start_task(&mut self) -> anyhow::Result<TaskConfig> {
         self.channel_tx
-            .send(Message::Worker(WorkerMessage::StartRequest {
+            .send(Message::Worker(WorkerMessage::StartTaskRequest {
                 runner_id: self.runner_state.runner_id,
                 task_id: self.task_id,
             }))
@@ -141,20 +139,20 @@ impl Worker {
             .await
             .ok_or(anyhow::anyhow!("Channel closed"))
             .and_then(|response| match response {
-                Message::Worker(WorkerMessage::StartResponse { result }) => {
+                Message::Worker(WorkerMessage::StartTaskResponse { result }) => {
                     result.map_err(|e| anyhow::anyhow!(e))
                 }
                 _ => Err(anyhow::anyhow!("Unexpected message type")),
             })
     }
 
-    async fn run_step(
+    async fn run_item(
         &mut self,
         sandbox: Arc<dyn Sandbox>,
         step: StepConfig,
-    ) -> anyhow::Result<StepResult> {
+    ) -> anyhow::Result<ItemResult> {
         let step_id = step.step_id;
-        self.start_step(step_id).await?;
+        self.start_item(step_id).await?;
 
         let envs = {
             let mut envs = HashMap::new();
@@ -163,7 +161,7 @@ impl Worker {
 
         let exit_status = {
             let (output_tx, output_rx) = mpsc::channel(1);
-            let output_handle = WorkerStepOutput::spawn(
+            let output_handle = WorkerItemOutput::spawn(
                 self.runner_state.clone(),
                 self.channel_tx.clone(),
                 self.task_id,
@@ -180,7 +178,7 @@ impl Worker {
         };
 
         self.channel_tx
-            .send(Message::Worker(WorkerMessage::StepProcessExitStatus {
+            .send(Message::Worker(WorkerMessage::ItemProcessExitStatus {
                 runner_id: self.runner_state.runner_id,
                 task_id: self.task_id,
                 step_id,
@@ -190,31 +188,31 @@ impl Worker {
 
         match exit_status {
             ExitStatus::Code(code) if code == 0 => {
-                self.complete_step(step_id).await?;
-                Ok(StepResult::Continue)
+                self.complete_item(step_id).await?;
+                Ok(ItemResult::Continue)
             }
             ExitStatus::Code(code) => {
-                self.fail_step(
+                self.fail_item(
                     step_id,
                     format!("Process exited with non-zero status code: [{}]", code),
                 )
                 .await?;
-                Ok(StepResult::Fail(format!(
+                Ok(ItemResult::Fail(format!(
                     "Process exited with non-zero status code: [{}]",
                     code
                 )))
             }
             ExitStatus::Signal => {
-                self.fail_step(step_id, "Process terminated by signal".to_string())
+                self.fail_item(step_id, "Process terminated by signal".to_string())
                     .await?;
-                Ok(StepResult::Fail("Process terminated by signal".to_string()))
+                Ok(ItemResult::Fail("Process terminated by signal".to_string()))
             }
         }
     }
 
-    async fn complete(&mut self) -> anyhow::Result<()> {
+    async fn complete_task(&mut self) -> anyhow::Result<()> {
         self.channel_tx
-            .send(Message::Worker(WorkerMessage::CompleteRequest {
+            .send(Message::Worker(WorkerMessage::CompleteTaskRequest {
                 runner_id: self.runner_state.runner_id,
                 task_id: self.task_id,
             }))
@@ -225,16 +223,16 @@ impl Worker {
             .await
             .ok_or(anyhow::anyhow!("Channel closed"))
             .and_then(|response| match response {
-                Message::Worker(WorkerMessage::CompleteResponse { result }) => {
+                Message::Worker(WorkerMessage::CompleteTaskResponse { result }) => {
                     result.map_err(|e| anyhow::anyhow!(e))
                 }
                 _ => Err(anyhow::anyhow!("Unexpected message type")),
             })
     }
 
-    async fn fail(&mut self, reason: String) -> anyhow::Result<()> {
+    async fn fail_task(&mut self, reason: String) -> anyhow::Result<()> {
         self.channel_tx
-            .send(Message::Worker(WorkerMessage::FailRequest {
+            .send(Message::Worker(WorkerMessage::FailTaskRequest {
                 runner_id: self.runner_state.runner_id,
                 task_id: self.task_id,
                 reason,
@@ -246,16 +244,16 @@ impl Worker {
             .await
             .ok_or(anyhow::anyhow!("Channel closed"))
             .and_then(|response| match response {
-                Message::Worker(WorkerMessage::FailResponse { result }) => {
+                Message::Worker(WorkerMessage::FailTaskResponse { result }) => {
                     result.map_err(|e| anyhow::anyhow!(e))
                 }
                 _ => Err(anyhow::anyhow!("Unexpected message type")),
             })
     }
 
-    async fn start_step(&mut self, step_id: StepId) -> anyhow::Result<()> {
+    async fn start_item(&mut self, step_id: StepId) -> anyhow::Result<()> {
         self.channel_tx
-            .send(Message::Worker(WorkerMessage::StartStepRequest {
+            .send(Message::Worker(WorkerMessage::StartItemRequest {
                 runner_id: self.runner_state.runner_id,
                 task_id: self.task_id,
                 step_id,
@@ -267,16 +265,16 @@ impl Worker {
             .await
             .ok_or(anyhow::anyhow!("Channel closed"))
             .and_then(|response| match response {
-                Message::Worker(WorkerMessage::StartStepResponse { result }) => {
+                Message::Worker(WorkerMessage::StartItemResponse { result }) => {
                     result.map_err(|e| anyhow::anyhow!(e))
                 }
                 _ => Err(anyhow::anyhow!("Unexpected message type")),
             })
     }
 
-    async fn complete_step(&mut self, step_id: StepId) -> anyhow::Result<()> {
+    async fn complete_item(&mut self, step_id: StepId) -> anyhow::Result<()> {
         self.channel_tx
-            .send(Message::Worker(WorkerMessage::CompleteStepRequest {
+            .send(Message::Worker(WorkerMessage::CompleteItemRequest {
                 runner_id: self.runner_state.runner_id,
                 task_id: self.task_id,
                 step_id,
@@ -288,16 +286,16 @@ impl Worker {
             .await
             .ok_or(anyhow::anyhow!("Channel closed"))
             .and_then(|response| match response {
-                Message::Worker(WorkerMessage::CompleteStepResponse { result }) => {
+                Message::Worker(WorkerMessage::CompleteItemResponse { result }) => {
                     result.map_err(|e| anyhow::anyhow!(e))
                 }
                 _ => Err(anyhow::anyhow!("Unexpected message type")),
             })
     }
 
-    async fn fail_step(&mut self, step_id: StepId, reason: String) -> anyhow::Result<()> {
+    async fn fail_item(&mut self, step_id: StepId, reason: String) -> anyhow::Result<()> {
         self.channel_tx
-            .send(Message::Worker(WorkerMessage::FailStepRequest {
+            .send(Message::Worker(WorkerMessage::FailItemRequest {
                 runner_id: self.runner_state.runner_id,
                 task_id: self.task_id,
                 step_id,
@@ -310,7 +308,7 @@ impl Worker {
             .await
             .ok_or(anyhow::anyhow!("Channel closed"))
             .and_then(|response| match response {
-                Message::Worker(WorkerMessage::FailStepResponse { result }) => {
+                Message::Worker(WorkerMessage::FailItemResponse { result }) => {
                     result.map_err(|e| anyhow::anyhow!(e))
                 }
                 _ => Err(anyhow::anyhow!("Unexpected message type")),
@@ -333,7 +331,7 @@ impl Future for WorkerStepOutputHandle {
     }
 }
 
-pub struct WorkerStepOutput {
+pub struct WorkerItemOutput {
     runner_state: Arc<RunnerState>,
     channel_tx: ChannelSender,
     task_id: TaskId,
@@ -341,7 +339,7 @@ pub struct WorkerStepOutput {
     output_rx: mpsc::Receiver<ProcessOutput>,
 }
 
-impl WorkerStepOutput {
+impl WorkerItemOutput {
     pub fn spawn(
         runner_state: Arc<RunnerState>,
         channel_tx: ChannelSender,
@@ -351,7 +349,7 @@ impl WorkerStepOutput {
     ) -> WorkerStepOutputHandle {
         let runner_state = runner_state.clone();
         let handle = tokio::spawn(async move {
-            WorkerStepOutput {
+            WorkerItemOutput {
                 runner_state,
                 channel_tx,
                 task_id,
@@ -383,7 +381,7 @@ impl WorkerStepOutput {
         while let Some(output) = self.output_rx.recv().await {
             let result = self
                 .channel_tx
-                .send(Message::Worker(WorkerMessage::StepProcessOutput {
+                .send(Message::Worker(WorkerMessage::ItemProcessOutput {
                     runner_id: self.runner_state.runner_id,
                     task_id: self.task_id,
                     step_id: self.step_id,
