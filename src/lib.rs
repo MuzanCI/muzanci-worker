@@ -117,6 +117,7 @@ pub async fn connect(
 
     let server_stream = hyper::upgrade::on(response).await?;
     let server_stream = hyper_util::rt::TokioIo::new(server_stream);
+    let (read_half, write_half) = tokio::io::split(server_stream);
 
     let channel_acceptor = FnChannelAcceptor::new(move |channel_id, channel_type| {
         panic!(
@@ -125,8 +126,8 @@ pub async fn connect(
         );
     });
 
-    let (mux_handle, _join_handle) =
-        Mux::spawn(server_stream, channel_acceptor, cancellation_token);
+    let (_join_handle, mux_handle) =
+        Mux::spawn(read_half, write_half, channel_acceptor, cancellation_token);
 
     Ok((runner_id, mux_handle))
 }
