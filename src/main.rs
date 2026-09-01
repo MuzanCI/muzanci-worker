@@ -5,15 +5,15 @@ use std::sync::Arc;
 use muzanci_image::reqwest_registry_client::ReqwestRegistryClient;
 use muzanci_runner::RunnerState;
 use muzanci_runner::assignment_capacity::SharedAssignmentCapacity;
-use muzanci_runner::debugger_scheduler::DebuggerScheduler;
+use muzanci_runner::channel::debugger_scheduler::DebuggerScheduler;
+use muzanci_runner::channel::evaluator_scheduler::EvaluatorScheduler;
+use muzanci_runner::channel::worker_scheduler::WorkerScheduler;
 use muzanci_runner::evaluation_capacity::SharedEvaluationCapacity;
-use muzanci_runner::evaluator_scheduler::EvaluatorScheduler;
 use muzanci_runner::sandbox::fake_sandboxer::FakeSandboxer;
 use muzanci_runner::sandbox::jail_sandboxer::JailSandboxer;
 use muzanci_runner::sandbox::zfs_image_store::ZfsImageStore;
 use muzanci_runner::sandbox::zfs_image_store::ZfsPool;
 use muzanci_runner::signal_receiver::SignalReceiver;
-use muzanci_runner::worker_scheduler::WorkerScheduler;
 use tokio_util::sync::CancellationToken;
 
 #[tokio::main]
@@ -54,16 +54,16 @@ async fn main() {
         evaluator_dir_root,
     ));
 
+    let signal_receiver_handle = SignalReceiver::spawn(runner_state.clone());
     let evaluator_scheduler_handle = EvaluatorScheduler::spawn(runner_state.clone());
     let worker_scheduler_handle = WorkerScheduler::spawn(runner_state.clone());
-    let signal_receiver_handle = SignalReceiver::spawn(runner_state.clone());
     let debugger_scheduler_handle = DebuggerScheduler::spawn(runner_state.clone());
 
     // TODO: Add cancellation token for graceful shutdown.
     let _ = tokio::join!(
+        signal_receiver_handle,
         evaluator_scheduler_handle,
         worker_scheduler_handle,
-        signal_receiver_handle,
         debugger_scheduler_handle
     );
 }

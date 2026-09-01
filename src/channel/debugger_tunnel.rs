@@ -32,8 +32,7 @@ impl Future for DebuggerTunnelHandle {
 pub struct DebuggerTunnel {
     cancellation_token: CancellationToken,
     debug_session_id: DebugSessionId,
-    channel_tx: Option<ChannelSender>,
-    channel_rx: Option<ChannelReceiver>,
+    channel_tx: ChannelSender,
 }
 
 impl DebuggerTunnel {
@@ -44,17 +43,16 @@ impl DebuggerTunnel {
         reply_tx: oneshot::Sender<()>,
     ) -> DebuggerTunnelHandle {
         let handle = tokio::spawn(async move {
-            let (channel_tx, channel_rx) = mux_handle
+            let (channel_tx, channel_rx, channel_closed) = mux_handle
                 .open_channel(ChannelType::DebuggerTunnel)
                 .await
                 .unwrap();
             DebuggerTunnel {
                 cancellation_token,
                 debug_session_id,
-                channel_tx: Some(channel_tx),
-                channel_rx: Some(channel_rx),
+                channel_tx,
             }
-            .run(reply_tx)
+            .run(channel_rx, channel_closed, reply_tx)
             .await
             .unwrap();
         });
@@ -62,7 +60,12 @@ impl DebuggerTunnel {
     }
 
     #[tracing::instrument(skip_all)]
-    async fn run(&mut self, reply_tx: oneshot::Sender<()>) -> anyhow::Result<()> {
+    async fn run(
+        self,
+        channel_rx: ChannelReceiver,
+        channel_closed: CancellationToken,
+        reply_tx: oneshot::Sender<()>,
+    ) -> anyhow::Result<()> {
         let cancellation_token = self.cancellation_token.clone();
         tokio::select! {
             _ = cancellation_token.cancelled() => {
@@ -70,7 +73,12 @@ impl DebuggerTunnel {
                 Ok(())
             }
 
-            result = self.main(reply_tx) => {
+            _ = channel_closed.cancelled() => {
+                tracing::info!("Channel closed. Stopping DebuggerTunnel.");
+                Ok(())
+            }
+
+            result = self.main(channel_rx, reply_tx) => {
                 match result {
                     Ok(_) => {
                         tracing::info!("DebuggerTunnel finished running.");
@@ -85,29 +93,26 @@ impl DebuggerTunnel {
     }
 
     #[tracing::instrument(skip_all)]
-    async fn main(&mut self, reply_tx: oneshot::Sender<()>) -> anyhow::Result<()> {
-        self.create_debug_tunnel().await?;
+    async fn main(
+        self,
+        mut channel_rx: ChannelReceiver,
+        reply_tx: oneshot::Sender<()>,
+    ) -> anyhow::Result<()> {
+        self.create_debug_tunnel(&mut channel_rx).await?;
         tracing::info!("Created debug tunnel");
-        let session = self.start_ssh_server().await?;
+
+        let session = self.start_ssh_server(channel_rx).await?;
         tracing::info!("Started SSH server");
+
         let _ = reply_tx.send(());
         tracing::info!("Sent reply");
+
         Ok(())
     }
 
     #[tracing::instrument(skip_all)]
-    async fn create_debug_tunnel(&mut self) -> anyhow::Result<()> {
-        let channel_tx = self
-            .channel_tx
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("channel_tx is not set"))?;
-
-        let channel_rx = self
-            .channel_rx
-            .as_mut()
-            .ok_or_else(|| anyhow::anyhow!("channel_rx is not set"))?;
-
-        channel_tx
+    async fn create_debug_tunnel(&self, channel_rx: &mut ChannelReceiver) -> anyhow::Result<()> {
+        self.channel_tx
             .send(Message::DebuggerTunnel(
                 DebuggerTunnelMessage::CreateDebugTunnelRequest {
                     debug_session_id: self.debug_session_id,
@@ -130,7 +135,7 @@ impl DebuggerTunnel {
     }
 
     #[tracing::instrument(skip_all)]
-    async fn start_ssh_server(&mut self) -> anyhow::Result<()> {
+    async fn start_ssh_server(&self, channel_rx: ChannelReceiver) -> anyhow::Result<()> {
         let private_key = russh::keys::PrivateKey::random(
             &mut russh::keys::key::safe_rng(),
             russh::keys::Algorithm::Ed25519,
@@ -139,23 +144,15 @@ impl DebuggerTunnel {
             keys: vec![private_key],
             ..Default::default()
         });
+
         let stream = {
-            let channel_tx = self
-                .channel_tx
-                .take()
-                .ok_or_else(|| anyhow::anyhow!("channel_tx is not set"))?;
-            let channel_rx = self
-                .channel_rx
-                .take()
-                .ok_or_else(|| anyhow::anyhow!("channel_rx is not set"))?;
+            let channel_tx = self.channel_tx.clone();
             combine_into_byte_stream(channel_tx, channel_rx)
         };
 
         let server_handler = ServerHandler::new("jid".to_string());
 
-        tracing::info!("About to start SSH server");
         tokio::spawn(russh::server::run_stream(config, stream, server_handler));
-
         tracing::info!("SSH server started");
 
         Ok(())

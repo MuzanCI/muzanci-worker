@@ -16,18 +16,12 @@ use crate::evaluation_capacity::SharedEvaluationCapacity;
 use crate::sandbox::Sandboxer;
 
 pub mod assignment_capacity;
-pub mod debugger;
-pub mod debugger_scheduler;
-pub mod debugger_tunnel;
+pub mod channel;
 pub mod evaluation_capacity;
-pub mod evaluator;
-pub mod evaluator_scheduler;
 pub mod logging;
 pub mod sandbox;
 pub mod signal_receiver;
 pub mod ssh;
-pub mod worker;
-pub mod worker_scheduler;
 
 #[derive(Clone)]
 pub struct RunnerState {

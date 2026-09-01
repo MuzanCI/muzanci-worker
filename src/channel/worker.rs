@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::join;
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 
 use muzanci_config::StepConfig;
 use muzanci_config::StepId;
@@ -40,7 +41,6 @@ impl Future for WorkerHandle {
 pub struct Worker {
     runner_state: Arc<RunnerState>,
     channel_tx: ChannelSender,
-    channel_rx: ChannelReceiver,
     task_id: TaskId,
     _permit: AssignmentCapacityPermit,
 }
@@ -58,7 +58,7 @@ impl Worker {
     ) -> WorkerHandle {
         let runner_state = runner_state.clone();
         let handle = tokio::spawn(async move {
-            let (channel_tx, channel_rx) = runner_state
+            let (channel_tx, channel_rx, channel_closed) = runner_state
                 .mux_handle
                 .open_channel(ChannelType::Worker)
                 .await
@@ -66,33 +66,41 @@ impl Worker {
             Worker {
                 runner_state,
                 channel_tx,
-                channel_rx,
                 task_id,
                 _permit: permit,
             }
-            .run()
+            .run(channel_rx, channel_closed)
             .await
             .unwrap();
         });
         WorkerHandle { handle }
     }
 
-    async fn run(&mut self) -> anyhow::Result<()> {
+    async fn run(
+        self,
+        channel_rx: ChannelReceiver,
+        channel_closed: CancellationToken,
+    ) -> anyhow::Result<()> {
         let cancellation_token = self.runner_state.cancellation_token.clone();
         tokio::select! {
             _ = cancellation_token.cancelled() => {
-                eprintln!("Worker received cancellation signal.");
+                tracing::info!("Worker received cancellation signal.");
                 Ok(())
             }
 
-            result = self.main() => {
+            _ = channel_closed.cancelled() => {
+                tracing::info!("Channel closed. Stopping worker.");
+                Ok(())
+            }
+
+            result = self.main(channel_rx) => {
                 result
             }
         }
     }
 
-    async fn main(&mut self) -> anyhow::Result<()> {
-        let task_config = self.start_task().await?;
+    async fn main(self, mut channel_rx: ChannelReceiver) -> anyhow::Result<()> {
+        let task_config = self.start_task(&mut channel_rx).await?;
         let sandbox_config = SandboxConfig {
             sandbox_id: SandboxId::now_v7(),
             image: task_config.image,
@@ -111,22 +119,25 @@ impl Worker {
             )?;
         }
         for step in task_config.steps {
-            match self.run_item(sandbox.clone(), step).await? {
+            match self
+                .run_item(&mut channel_rx, sandbox.clone(), step)
+                .await?
+            {
                 ItemResult::Continue => {
                     continue;
                 }
                 ItemResult::Fail(reason) => {
-                    self.fail_task(reason).await?;
+                    self.fail_task(&mut channel_rx, reason).await?;
                     // The step failed so we stop, but the worker itself
                     // is considered successful.
                     return Ok(());
                 }
             }
         }
-        self.complete_task().await
+        self.complete_task(&mut channel_rx).await
     }
 
-    async fn start_task(&mut self) -> anyhow::Result<TaskConfig> {
+    async fn start_task(&self, channel_rx: &mut ChannelReceiver) -> anyhow::Result<TaskConfig> {
         self.channel_tx
             .send(Message::Worker(WorkerMessage::StartTaskRequest {
                 runner_id: self.runner_state.runner_id,
@@ -134,7 +145,7 @@ impl Worker {
             }))
             .await?;
 
-        self.channel_rx
+        channel_rx
             .recv()
             .await
             .ok_or(anyhow::anyhow!("Channel closed"))
@@ -147,12 +158,13 @@ impl Worker {
     }
 
     async fn run_item(
-        &mut self,
+        &self,
+        channel_rx: &mut ChannelReceiver,
         sandbox: Arc<dyn Sandbox>,
         step: StepConfig,
     ) -> anyhow::Result<ItemResult> {
         let step_id = step.step_id;
-        self.start_item(step_id).await?;
+        self.start_item(channel_rx, step_id).await?;
 
         let envs = {
             let mut envs = HashMap::new();
@@ -188,11 +200,12 @@ impl Worker {
 
         match exit_status {
             ExitStatus::Code(code) if code == 0 => {
-                self.complete_item(step_id).await?;
+                self.complete_item(channel_rx, step_id).await?;
                 Ok(ItemResult::Continue)
             }
             ExitStatus::Code(code) => {
                 self.fail_item(
+                    channel_rx,
                     step_id,
                     format!("Process exited with non-zero status code: [{}]", code),
                 )
@@ -203,14 +216,18 @@ impl Worker {
                 )))
             }
             ExitStatus::Signal => {
-                self.fail_item(step_id, "Process terminated by signal".to_string())
-                    .await?;
+                self.fail_item(
+                    channel_rx,
+                    step_id,
+                    "Process terminated by signal".to_string(),
+                )
+                .await?;
                 Ok(ItemResult::Fail("Process terminated by signal".to_string()))
             }
         }
     }
 
-    async fn complete_task(&mut self) -> anyhow::Result<()> {
+    async fn complete_task(&self, channel_rx: &mut ChannelReceiver) -> anyhow::Result<()> {
         self.channel_tx
             .send(Message::Worker(WorkerMessage::CompleteTaskRequest {
                 runner_id: self.runner_state.runner_id,
@@ -218,7 +235,7 @@ impl Worker {
             }))
             .await?;
 
-        self.channel_rx
+        channel_rx
             .recv()
             .await
             .ok_or(anyhow::anyhow!("Channel closed"))
@@ -230,7 +247,11 @@ impl Worker {
             })
     }
 
-    async fn fail_task(&mut self, reason: String) -> anyhow::Result<()> {
+    async fn fail_task(
+        &self,
+        channel_rx: &mut ChannelReceiver,
+        reason: String,
+    ) -> anyhow::Result<()> {
         self.channel_tx
             .send(Message::Worker(WorkerMessage::FailTaskRequest {
                 runner_id: self.runner_state.runner_id,
@@ -239,7 +260,7 @@ impl Worker {
             }))
             .await?;
 
-        self.channel_rx
+        channel_rx
             .recv()
             .await
             .ok_or(anyhow::anyhow!("Channel closed"))
@@ -251,7 +272,11 @@ impl Worker {
             })
     }
 
-    async fn start_item(&mut self, step_id: StepId) -> anyhow::Result<()> {
+    async fn start_item(
+        &self,
+        channel_rx: &mut ChannelReceiver,
+        step_id: StepId,
+    ) -> anyhow::Result<()> {
         self.channel_tx
             .send(Message::Worker(WorkerMessage::StartItemRequest {
                 runner_id: self.runner_state.runner_id,
@@ -260,7 +285,7 @@ impl Worker {
             }))
             .await?;
 
-        self.channel_rx
+        channel_rx
             .recv()
             .await
             .ok_or(anyhow::anyhow!("Channel closed"))
@@ -272,7 +297,11 @@ impl Worker {
             })
     }
 
-    async fn complete_item(&mut self, step_id: StepId) -> anyhow::Result<()> {
+    async fn complete_item(
+        &self,
+        channel_rx: &mut ChannelReceiver,
+        step_id: StepId,
+    ) -> anyhow::Result<()> {
         self.channel_tx
             .send(Message::Worker(WorkerMessage::CompleteItemRequest {
                 runner_id: self.runner_state.runner_id,
@@ -281,7 +310,7 @@ impl Worker {
             }))
             .await?;
 
-        self.channel_rx
+        channel_rx
             .recv()
             .await
             .ok_or(anyhow::anyhow!("Channel closed"))
@@ -293,7 +322,12 @@ impl Worker {
             })
     }
 
-    async fn fail_item(&mut self, step_id: StepId, reason: String) -> anyhow::Result<()> {
+    async fn fail_item(
+        &self,
+        channel_rx: &mut ChannelReceiver,
+        step_id: StepId,
+        reason: String,
+    ) -> anyhow::Result<()> {
         self.channel_tx
             .send(Message::Worker(WorkerMessage::FailItemRequest {
                 runner_id: self.runner_state.runner_id,
@@ -303,7 +337,7 @@ impl Worker {
             }))
             .await?;
 
-        self.channel_rx
+        channel_rx
             .recv()
             .await
             .ok_or(anyhow::anyhow!("Channel closed"))

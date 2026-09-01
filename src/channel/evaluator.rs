@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
 use url::Url;
 
 use muzanci_config::Config;
@@ -37,7 +38,6 @@ impl Future for EvaluatorHandle {
 pub struct Evaluator {
     runner_state: Arc<RunnerState>,
     channel_tx: ChannelSender,
-    channel_rx: ChannelReceiver,
     trigger_id: TriggerId,
     capacity: EvaluationCapacity,
     _permit: EvaluationCapacityPermit,
@@ -52,7 +52,7 @@ impl Evaluator {
     ) -> EvaluatorHandle {
         let runner_state = runner_state.clone();
         let handle = tokio::spawn(async move {
-            let (channel_tx, channel_rx) = runner_state
+            let (channel_tx, channel_rx, channel_closed) = runner_state
                 .mux_handle
                 .open_channel(ChannelType::Evaluator)
                 .await
@@ -60,19 +60,22 @@ impl Evaluator {
             Evaluator {
                 runner_state,
                 channel_tx,
-                channel_rx,
                 trigger_id,
                 capacity,
                 _permit: permit,
             }
-            .run()
+            .run(channel_rx, channel_closed)
             .await
             .unwrap();
         });
         EvaluatorHandle { handle }
     }
 
-    async fn run(&mut self) -> anyhow::Result<()> {
+    async fn run(
+        self,
+        channel_rx: ChannelReceiver,
+        channel_closed: CancellationToken,
+    ) -> anyhow::Result<()> {
         let cancellation_token = self.runner_state.cancellation_token.clone();
         tokio::select! {
             _ = cancellation_token.cancelled() => {
@@ -80,21 +83,26 @@ impl Evaluator {
                 Ok(())
             }
 
-            result = self.main() => {
+            _ = channel_closed.cancelled() => {
+                tracing::info!("Channel closed. Stopping Evaluator.");
+                Ok(())
+            }
+
+            result = self.main(channel_rx) => {
                 result
             }
         }
     }
 
-    async fn main(&mut self) -> anyhow::Result<()> {
-        let config = self.start().await?;
+    async fn main(self, mut channel_rx: ChannelReceiver) -> anyhow::Result<()> {
+        let config = self.start(&mut channel_rx).await?;
         match self.evaluate(&config).await {
-            Ok(config) => self.complete(config).await,
-            Err(e) => self.fail(e.to_string()).await,
+            Ok(config) => self.complete(&mut channel_rx, config).await,
+            Err(e) => self.fail(&mut channel_rx, e.to_string()).await,
         }
     }
 
-    async fn start(&mut self) -> anyhow::Result<TriggerConfig> {
+    async fn start(&self, channel_rx: &mut ChannelReceiver) -> anyhow::Result<TriggerConfig> {
         self.channel_tx
             .send(Message::Evaluator(EvaluatorMessage::StartRequest {
                 runner_id: self.runner_state.runner_id,
@@ -102,7 +110,7 @@ impl Evaluator {
             }))
             .await?;
 
-        self.channel_rx
+        channel_rx
             .recv()
             .await
             .ok_or(anyhow::anyhow!("Channel closed"))
@@ -143,7 +151,11 @@ impl Evaluator {
         Config::from_file(&input, &env)
     }
 
-    async fn complete(&mut self, config: Config) -> anyhow::Result<()> {
+    async fn complete(
+        &self,
+        channel_rx: &mut ChannelReceiver,
+        config: Config,
+    ) -> anyhow::Result<()> {
         self.channel_tx
             .send(Message::Evaluator(EvaluatorMessage::CompleteRequest {
                 runner_id: self.runner_state.runner_id,
@@ -152,7 +164,7 @@ impl Evaluator {
             }))
             .await?;
 
-        self.channel_rx
+        channel_rx
             .recv()
             .await
             .ok_or(anyhow::anyhow!("Channel closed"))
@@ -164,7 +176,7 @@ impl Evaluator {
             })
     }
 
-    async fn fail(&mut self, reason: String) -> anyhow::Result<()> {
+    async fn fail(&self, channel_rx: &mut ChannelReceiver, reason: String) -> anyhow::Result<()> {
         self.channel_tx
             .send(Message::Evaluator(EvaluatorMessage::FailRequest {
                 runner_id: self.runner_state.runner_id,
@@ -173,7 +185,7 @@ impl Evaluator {
             }))
             .await?;
 
-        self.channel_rx
+        channel_rx
             .recv()
             .await
             .ok_or(anyhow::anyhow!("Channel closed"))
@@ -183,13 +195,5 @@ impl Evaluator {
                 }
                 _ => Err(anyhow::anyhow!("Unexpected message type")),
             })
-    }
-}
-
-impl Drop for Evaluator {
-    fn drop(&mut self) {
-        self.runner_state
-            .shared_evaluation_capacity
-            .restore(self.capacity);
     }
 }

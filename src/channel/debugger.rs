@@ -5,6 +5,7 @@ use std::sync::Arc;
 use tempfile::NamedTempFile;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::oneshot;
+use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 use url::Url;
 
@@ -21,7 +22,7 @@ use muzanci_transport::message::Message;
 
 use crate::RunnerState;
 use crate::assignment_capacity::AssignmentCapacityPermit;
-use crate::debugger_tunnel::DebuggerTunnel;
+use crate::channel::debugger_tunnel::DebuggerTunnel;
 use crate::sandbox::Sandbox;
 use crate::sandbox::SandboxConfig;
 use crate::sandbox::SandboxId;
@@ -48,7 +49,6 @@ impl Future for DebuggerHandle {
 pub struct Debugger {
     runner_state: Arc<RunnerState>,
     channel_tx: ChannelSender,
-    channel_rx: ChannelReceiver,
     debug_session_id: DebugSessionId,
     sandbox: Option<Arc<dyn Sandbox>>,
     diff_file: Option<NamedTempFile>,
@@ -64,7 +64,7 @@ impl Debugger {
     ) -> DebuggerHandle {
         let runner_state = runner_state.clone();
         let handle = tokio::spawn(async move {
-            let (channel_tx, channel_rx) = runner_state
+            let (channel_tx, channel_rx, channel_closed) = runner_state
                 .mux_handle
                 .open_channel(ChannelType::Debugger)
                 .await
@@ -72,14 +72,13 @@ impl Debugger {
             Debugger {
                 runner_state,
                 channel_tx,
-                channel_rx,
                 debug_session_id,
                 sandbox: None,
                 diff_file: None,
                 diff_hasher: None,
                 _permit: permit,
             }
-            .run()
+            .run(channel_rx, channel_closed)
             .await
             .unwrap();
         });
@@ -87,25 +86,32 @@ impl Debugger {
     }
 
     #[instrument(skip_all)]
-    async fn run(&mut self) -> anyhow::Result<()> {
+    async fn run(
+        self,
+        channel_rx: ChannelReceiver,
+        channel_closed: CancellationToken,
+    ) -> anyhow::Result<()> {
         let cancellation_token = self.runner_state.cancellation_token.clone();
         tokio::select! {
             _ = cancellation_token.cancelled() => {
-                eprintln!("Debugger received cancellation signal.");
+                tracing::info!("Debugger received cancellation signal.");
                 Ok(())
             }
-
-            result = self.main() => {
+            _ = channel_closed.cancelled() => {
+                tracing::info!("Channel closed, stopping Debugger.");
+                Ok(())
+            }
+            result = self.main(channel_rx) => {
                 result
             }
         }
     }
 
     #[instrument(skip_all)]
-    async fn main(&mut self) -> anyhow::Result<()> {
-        self.connect_debugger().await?;
+    async fn main(mut self, mut channel_rx: ChannelReceiver) -> anyhow::Result<()> {
+        self.connect_debugger(&mut channel_rx).await?;
         loop {
-            match self.channel_rx.recv().await {
+            match channel_rx.recv().await {
                 Some(message) => {
                     self.handle_message(message).await?;
                 }
@@ -117,14 +123,14 @@ impl Debugger {
         }
     }
 
-    async fn connect_debugger(&mut self) -> anyhow::Result<()> {
+    async fn connect_debugger(&self, channel_rx: &mut ChannelReceiver) -> anyhow::Result<()> {
         self.channel_tx
             .send(Message::Debugger(DebuggerMessage::ConnectDebuggerRequest {
                 debug_session_id: self.debug_session_id,
             }))
             .await?;
 
-        self.channel_rx
+        channel_rx
             .recv()
             .await
             .ok_or(anyhow::anyhow!("Channel closed"))
@@ -200,7 +206,7 @@ impl Debugger {
     }
 
     async fn handle_checkout_branch_request(
-        &mut self,
+        &self,
         url: Url,
         branch: GitBranch,
     ) -> anyhow::Result<()> {
@@ -218,7 +224,7 @@ impl Debugger {
         Ok(())
     }
 
-    async fn checkout_branch(&mut self, url: Url, branch: GitBranch) -> anyhow::Result<()> {
+    async fn checkout_branch(&self, url: Url, branch: GitBranch) -> anyhow::Result<()> {
         let sandbox = self
             .sandbox
             .as_ref()
@@ -323,7 +329,7 @@ impl Debugger {
         Ok(())
     }
 
-    async fn handle_apply_diff_request(&mut self) -> anyhow::Result<()> {
+    async fn handle_apply_diff_request(&self) -> anyhow::Result<()> {
         let result = self.apply_diff().await.map_err(|e| e.to_string());
         self.channel_tx
             .send(Message::DebugClient(
@@ -334,7 +340,7 @@ impl Debugger {
         Ok(())
     }
 
-    async fn apply_diff(&mut self) -> anyhow::Result<()> {
+    async fn apply_diff(&self) -> anyhow::Result<()> {
         let sandbox = self
             .sandbox
             .as_ref()
@@ -353,7 +359,7 @@ impl Debugger {
         Ok(())
     }
 
-    async fn handle_start_shell_request(&mut self, step: StepConfig) -> anyhow::Result<()> {
+    async fn handle_start_shell_request(&self, step: StepConfig) -> anyhow::Result<()> {
         let result = self.start_shell(step).await.map_err(|e| e.to_string());
         self.channel_tx
             .send(Message::DebugClient(
@@ -364,7 +370,7 @@ impl Debugger {
         Ok(())
     }
 
-    async fn start_shell(&mut self, step: StepConfig) -> anyhow::Result<()> {
+    async fn start_shell(&self, step: StepConfig) -> anyhow::Result<()> {
         let (reply_tx, reply_rx) = oneshot::channel();
 
         DebuggerTunnel::spawn(
@@ -378,7 +384,7 @@ impl Debugger {
         Ok(())
     }
 
-    async fn handle_execute_step_request(&mut self, step: StepConfig) -> anyhow::Result<()> {
+    async fn handle_execute_step_request(&self, step: StepConfig) -> anyhow::Result<()> {
         let result = self.execute_step().await.map_err(|e| e.to_string());
         self.channel_tx
             .send(Message::DebugClient(
@@ -389,7 +395,7 @@ impl Debugger {
         Ok(())
     }
 
-    async fn execute_step(&mut self) -> anyhow::Result<()> {
+    async fn execute_step(&self) -> anyhow::Result<()> {
         anyhow::bail!("not_implemented")
     }
 }
