@@ -6,7 +6,6 @@ use tempfile::NamedTempFile;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
-use tracing::instrument;
 use url::Url;
 
 use muzanci_config::StepConfig;
@@ -85,7 +84,7 @@ impl Debugger {
         DebuggerHandle { handle }
     }
 
-    #[instrument(skip_all)]
+    #[tracing::instrument(skip_all)]
     async fn run(
         self,
         channel_rx: ChannelReceiver,
@@ -107,7 +106,7 @@ impl Debugger {
         }
     }
 
-    #[instrument(skip_all)]
+    #[tracing::instrument(skip_all)]
     async fn main(mut self, mut channel_rx: ChannelReceiver) -> anyhow::Result<()> {
         self.connect_debugger(&mut channel_rx).await?;
         loop {
